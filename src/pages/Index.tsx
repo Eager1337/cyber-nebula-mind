@@ -1,5 +1,6 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Settings, ChevronLeft, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
 import AICore from "@/components/AICore";
 import StatusIndicator from "@/components/StatusIndicator";
 import VoiceOrb from "@/components/VoiceOrb";
@@ -8,20 +9,14 @@ import ChatPanel from "@/components/ChatPanel";
 import VoiceSelector from "@/components/VoiceSelector";
 import SettingsDrawer from "@/components/SettingsDrawer";
 import { useSpeech } from "@/hooks/useSpeech";
+import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import { streamChat } from "@/lib/streamChat";
 
 interface Message {
   id: number;
   role: "user" | "assistant";
   content: string;
 }
-
-const modeResponses: Record<string, string> = {
-  default: "Processing. I'll deliver structured, actionable intel. No fluff. What's the objective?",
-  machiavelli: "Power is not given — it's engineered. State your strategic problem.",
-  shelby: "Right. No time for sentiment. What needs doing?",
-  wealth: "Capital follows systems, not emotions. What's your financial vector?",
-  cyber: "Defensive perimeter active. What threat landscape are we analyzing?",
-};
 
 let msgCounter = 0;
 
@@ -32,51 +27,81 @@ const Index = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const chatHistoryRef = useRef<{ role: "user" | "assistant"; content: string }[]>([]);
 
   const speech = useSpeech({
     onStart: () => setStatus("speaking"),
     onEnd: () => setStatus("idle"),
   });
 
+  const sendToAI = useCallback(
+    async (userText: string) => {
+      const userId = ++msgCounter;
+      setMessages((prev) => [...prev, { id: userId, role: "user", content: userText }]);
+      chatHistoryRef.current.push({ role: "user", content: userText });
+      setStatus("thinking");
+
+      let assistantContent = "";
+      const assistantId = ++msgCounter;
+
+      try {
+        await streamChat({
+          messages: chatHistoryRef.current,
+          mode,
+          onDelta: (chunk) => {
+            assistantContent += chunk;
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last?.role === "assistant" && last.id === assistantId) {
+                return prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: assistantContent } : m
+                );
+              }
+              return [...prev, { id: assistantId, role: "assistant", content: assistantContent }];
+            });
+          },
+          onDone: () => {
+            chatHistoryRef.current.push({ role: "assistant", content: assistantContent });
+            if (assistantContent) {
+              speech.speak(assistantContent);
+            } else {
+              setStatus("idle");
+            }
+          },
+        });
+      } catch (e: any) {
+        console.error("AI error:", e);
+        toast.error(e.message || "Failed to get AI response");
+        setStatus("idle");
+      }
+    },
+    [mode, speech]
+  );
+
+  const { startListening, stopListening, isListening } = useSpeechRecognition({
+    onFinalTranscript: (transcript) => {
+      sendToAI(transcript);
+    },
+  });
+
   const handleVoice = useCallback(() => {
     if (status === "idle") {
+      startListening();
       setStatus("listening");
-      // Simulate voice input → thinking → speaking
-      setTimeout(() => {
-        setStatus("thinking");
-        const response = modeResponses[mode];
-        setTimeout(() => {
-          const id = ++msgCounter;
-          setMessages((prev) => [
-            ...prev,
-            { id, role: "assistant", content: response },
-          ]);
-          speech.speak(response);
-        }, 1200);
-      }, 2000);
+    } else if (status === "listening") {
+      stopListening();
+      setStatus("idle");
     } else {
       speech.stop();
       setStatus("idle");
     }
-  }, [status, mode, speech]);
+  }, [status, startListening, stopListening, speech]);
 
   const handleSend = useCallback(
     (text: string) => {
-      const userId = ++msgCounter;
-      setMessages((prev) => [...prev, { id: userId, role: "user", content: text }]);
-      setStatus("thinking");
-
-      setTimeout(() => {
-        const assistantId = ++msgCounter;
-        const response = modeResponses[mode];
-        setMessages((prev) => [
-          ...prev,
-          { id: assistantId, role: "assistant", content: response },
-        ]);
-        speech.speak(response);
-      }, 1200);
+      sendToAI(text);
     },
-    [mode, speech]
+    [sendToAI]
   );
 
   return (
@@ -143,7 +168,13 @@ const Index = () => {
           <AICore status={status} />
           <VoiceOrb isActive={status === "listening" || status === "speaking"} onClick={handleVoice} />
           <p className="font-display text-[9px] tracking-[0.3em] text-muted-foreground">
-            {status === "idle" ? "TAP TO ACTIVATE VOICE" : status === "speaking" ? "SPEAKING — TAP TO STOP" : "PROCESSING…"}
+            {status === "idle"
+              ? "TAP TO ACTIVATE VOICE"
+              : status === "listening"
+              ? "LISTENING — TAP TO STOP"
+              : status === "speaking"
+              ? "SPEAKING — TAP TO STOP"
+              : "PROCESSING…"}
           </p>
 
           {/* Mobile mode pills */}

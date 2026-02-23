@@ -6,9 +6,9 @@ interface VoiceSelectorProps {
   onSelect: (voice: string) => void;
 }
 
-const VoiceSelector = ({ voices, activeVoice, onSelect }: VoiceSelectorProps) => {
+const VoiceSelector = ({ voices = [], activeVoice, onSelect }: VoiceSelectorProps) => {
   // Show up to 8 English voices for cleanliness
-  const englishVoices = voices
+  const englishVoices = (voices || [])
     .filter((v) => v.lang.startsWith("en"))
     .slice(0, 8);
 
