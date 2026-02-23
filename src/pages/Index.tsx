@@ -7,6 +7,7 @@ import ModeSelector from "@/components/ModeSelector";
 import ChatPanel from "@/components/ChatPanel";
 import VoiceSelector from "@/components/VoiceSelector";
 import SettingsDrawer from "@/components/SettingsDrawer";
+import { useSpeech } from "@/hooks/useSpeech";
 
 interface Message {
   id: number;
@@ -22,47 +23,60 @@ const modeResponses: Record<string, string> = {
   cyber: "Defensive perimeter active. What threat landscape are we analyzing?",
 };
 
+let msgCounter = 0;
+
 const Index = () => {
   const [status, setStatus] = useState<"idle" | "listening" | "thinking" | "speaking">("idle");
   const [mode, setMode] = useState("default");
-  const [voice, setVoice] = useState("nova");
   const [messages, setMessages] = useState<Message[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
-  let nextId = messages.length;
+
+  const speech = useSpeech({
+    onStart: () => setStatus("speaking"),
+    onEnd: () => setStatus("idle"),
+  });
 
   const handleVoice = useCallback(() => {
     if (status === "idle") {
       setStatus("listening");
+      // Simulate voice input → thinking → speaking
       setTimeout(() => {
         setStatus("thinking");
+        const response = modeResponses[mode];
         setTimeout(() => {
-          setStatus("speaking");
-          setTimeout(() => setStatus("idle"), 2500);
-        }, 1500);
+          const id = ++msgCounter;
+          setMessages((prev) => [
+            ...prev,
+            { id, role: "assistant", content: response },
+          ]);
+          speech.speak(response);
+        }, 1200);
       }, 2000);
     } else {
+      speech.stop();
       setStatus("idle");
     }
-  }, [status]);
+  }, [status, mode, speech]);
 
   const handleSend = useCallback(
     (text: string) => {
-      const userId = ++nextId;
-      const assistantId = userId + 1;
+      const userId = ++msgCounter;
       setMessages((prev) => [...prev, { id: userId, role: "user", content: text }]);
       setStatus("thinking");
+
       setTimeout(() => {
+        const assistantId = ++msgCounter;
+        const response = modeResponses[mode];
         setMessages((prev) => [
           ...prev,
-          { id: assistantId, role: "assistant", content: modeResponses[mode] },
+          { id: assistantId, role: "assistant", content: response },
         ]);
-        setStatus("speaking");
-        setTimeout(() => setStatus("idle"), 2000);
+        speech.speak(response);
       }, 1200);
     },
-    [mode]
+    [mode, speech]
   );
 
   return (
@@ -97,7 +111,7 @@ const Index = () => {
 
       {/* Main layout */}
       <div className="relative z-10 flex h-[calc(100vh-49px)]">
-        {/* Left panel – Mode & Voice */}
+        {/* Left panel */}
         <div
           className={`hidden md:flex flex-col gap-4 p-4 transition-all duration-500 ${
             leftOpen ? "w-64" : "w-0 p-0 overflow-hidden"
@@ -106,7 +120,11 @@ const Index = () => {
           {leftOpen && (
             <>
               <ModeSelector activeMode={mode} onSelect={setMode} />
-              <VoiceSelector activeVoice={voice} onSelect={setVoice} />
+              <VoiceSelector
+                voices={speech.voices}
+                activeVoice={speech.selectedVoice}
+                onSelect={speech.setSelectedVoice}
+              />
             </>
           )}
         </div>
@@ -123,12 +141,12 @@ const Index = () => {
         {/* Center – AI Core */}
         <div className="flex-1 flex flex-col items-center justify-center gap-6 px-4">
           <AICore status={status} />
-          <VoiceOrb isActive={status === "listening"} onClick={handleVoice} />
+          <VoiceOrb isActive={status === "listening" || status === "speaking"} onClick={handleVoice} />
           <p className="font-display text-[9px] tracking-[0.3em] text-muted-foreground">
-            TAP TO ACTIVATE VOICE
+            {status === "idle" ? "TAP TO ACTIVATE VOICE" : status === "speaking" ? "SPEAKING — TAP TO STOP" : "PROCESSING…"}
           </p>
 
-          {/* Mobile mode/voice pills */}
+          {/* Mobile mode pills */}
           <div className="flex md:hidden gap-2 flex-wrap justify-center">
             {["default", "machiavelli", "shelby", "wealth", "cyber"].map((m) => (
               <button
@@ -165,7 +183,7 @@ const Index = () => {
         </div>
       </div>
 
-      {/* Mobile chat (bottom sheet style) */}
+      {/* Mobile chat */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 h-[45vh] glass-panel rounded-t-2xl z-20 flex flex-col">
         <ChatPanel messages={messages} onSend={handleSend} />
       </div>
